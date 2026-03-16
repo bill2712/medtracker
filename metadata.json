@@ -1,0 +1,5 @@
+{
+  "name": "MedTracker",
+  "description": "A medication tracking app to count pills, schedule next doses, and set calendar reminders.",
+  "requestFramePermissions": []
+}
