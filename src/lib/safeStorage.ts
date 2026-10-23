@@ -34,3 +34,12 @@ export const storage = {
     storage.set(key, JSON.stringify(value));
   },
 };
+
+/** history.pushState throws in some sandboxed frames and file:// pages; the app keeps working without it. */
+export function safePushState(state: unknown, url: string): void {
+  try {
+    window.history.pushState(state, '', url);
+  } catch {
+    /* ignore */
+  }
+}

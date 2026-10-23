@@ -164,7 +164,7 @@ export function MedicationForm({
       }
     >
       <form id={id('form')} onSubmit={submit} noValidate className="space-y-5">
-        <div className="grid grid-cols-[1fr_8rem] gap-3">
+        <div className="grid grid-cols-[1fr_9rem] items-end gap-3">
           <Field id={id('name')} label={m.form.name} error={errors.name}>
             <input
               id={id('name')}
@@ -232,7 +232,7 @@ export function MedicationForm({
                 title={m.colors[c]}
                 onClick={() => set('color', c)}
                 className={cx(
-                  'flex h-9 w-9 items-center justify-center rounded-full text-white transition-transform',
+                  'flex h-8 w-8 items-center justify-center rounded-full text-white transition-transform sm:h-9 sm:w-9',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-slate-900',
                   COLOR[c].dot,
                   draft.color === c ? 'scale-110 ring-2 ring-slate-900 ring-offset-2 dark:ring-white dark:ring-offset-slate-900' : 'hover:scale-105',

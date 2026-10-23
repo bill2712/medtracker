@@ -18,6 +18,7 @@ import { buildICS } from './lib/ics';
 import { displayName, shareSummary } from './lib/describe';
 import { downloadFile, readFile, safeFilename, shareText } from './lib/files';
 import { requestPermission, showNotification } from './lib/notifications';
+import { safePushState } from './lib/safeStorage';
 import { sampleMeds } from './lib/sample';
 import { ToastProvider, useToast } from './components/Toast';
 import { ConfirmDialog, cx } from './components/ui';
@@ -44,7 +45,7 @@ function useHashView() {
   const go = useCallback((v: View) => {
     const hash = v === 'today' ? '' : `#/${v}`;
     if (window.location.hash !== hash) {
-      window.history.pushState(null, '', window.location.pathname + window.location.search + hash);
+      safePushState(null, window.location.pathname + window.location.search + hash);
       setView(v);
     }
     window.scrollTo({ top: 0 });
