@@ -1,11 +1,12 @@
 import { useMemo } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { AlarmClock, ChevronDown, Clock, PackagePlus, PartyPopper, Pill, Plus, Sparkles, TriangleAlert } from 'lucide-react';
-import type { Medication } from '../types';
+import type { Appointment, Medication } from '../types';
 import { useI18n } from '../i18n';
 import { adherence, compareMeds, getStatus, isLowStock, summarizeDay, summarizeRange, startOfDay } from '../lib/schedule';
 import { displayName } from '../lib/describe';
 import { MedicationCard } from './MedicationCard';
+import { AppointmentSummary } from './VisitParts';
 import { buttonClass, cx, MedIcon } from './ui';
 
 type Handlers = {
@@ -38,7 +39,19 @@ function Ring({ value, label }: { value: number; label: string }) {
   );
 }
 
-function Dashboard({ meds, now }: { meds: Medication[]; now: number }) {
+function Dashboard({
+  meds,
+  now,
+  nextAppt,
+  openNotesCount,
+  onOpenAppt,
+}: {
+  meds: Medication[];
+  now: number;
+  nextAppt: Appointment | null;
+  openNotesCount: number;
+  onOpenAppt: (a: Appointment) => void;
+}) {
   const { m, f, t } = useI18n();
   const nowDate = new Date(now);
   const today = summarizeDay(meds, startOfDay(now), now);
@@ -136,6 +149,11 @@ function Dashboard({ meds, now }: { meds: Medication[]; now: number }) {
           </ul>
         </div>
       </div>
+      {nextAppt && (
+        <div className="mt-3">
+          <AppointmentSummary appt={nextAppt} now={now} notesCount={openNotesCount} onOpen={() => onOpenAppt(nextAppt)} emphasis />
+        </div>
+      )}
     </section>
   );
 }
@@ -168,12 +186,18 @@ export function TodayView({
   handlers,
   onAdd,
   onSample,
+  nextAppt,
+  openNotesCount,
+  onOpenAppt,
 }: {
   meds: Medication[];
   now: number;
   handlers: Handlers;
   onAdd: () => void;
   onSample: () => void;
+  nextAppt: Appointment | null;
+  openNotesCount: number;
+  onOpenAppt: (a: Appointment) => void;
 }) {
   const { m } = useI18n();
 
@@ -216,7 +240,7 @@ export function TodayView({
 
   return (
     <>
-      <Dashboard meds={meds} now={now} />
+      <Dashboard meds={meds} now={now} nextAppt={nextAppt} openNotesCount={openNotesCount} onOpenAppt={onOpenAppt} />
       {scheduled.length > 0 && (
         <section>
           {heading(m.sections.active, scheduled.length)}

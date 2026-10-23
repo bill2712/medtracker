@@ -44,4 +44,35 @@ export type Settings = {
   notifications: boolean;
 };
 
-export type View = 'today' | 'history' | 'settings';
+export type View = 'today' | 'visits' | 'history' | 'settings';
+
+export const NOTE_KINDS = ['symptom', 'sideEffect', 'question', 'request'] as const;
+export type NoteKind = (typeof NOTE_KINDS)[number];
+
+/** Something to tell or ask the doctor at the next visit. */
+export type DoctorNote = {
+  id: string;
+  text: string;
+  kind: NoteKind;
+  medId?: string;
+  createdAt: string;
+  /** Set once discussed; the note then belongs to that visit. */
+  resolved?: boolean;
+  apptId?: string;
+};
+
+/** Minutes before the appointment. */
+export const REMINDER_OPTIONS = [10080, 1440, 120, 0] as const;
+
+export type Appointment = {
+  id: string;
+  doctor: string;
+  clinic: string;
+  location: string;
+  time: string; // ISO timestamp
+  reminders: number[];
+  bring: string;
+  outcome: string;
+  done: boolean;
+  createdAt: string;
+};
