@@ -127,7 +127,7 @@ export function Field({
     <div>
       <label htmlFor={id} className="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
         {label}
-        {optional && <span className="ml-1 font-normal text-slate-400">({optional})</span>}
+        {optional && <span className="font-normal text-slate-400"> ({optional})</span>}
       </label>
       {children}
       {error ? (

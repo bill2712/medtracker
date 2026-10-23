@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { getLanguage, isLang, langFromPath, matchLanguage, type Lang } from './config';
 import { createFormatter, fmt, type Formatter } from './format';
 import type { Messages } from './locales/en';
-import { storage } from '../lib/safeStorage';
+import { safePushState, storage } from '../lib/safeStorage';
 
 const loaders: Record<Lang, () => Promise<{ default: Messages }>> = {
   en: () => import('./locales/en'),
@@ -64,7 +64,7 @@ export function I18nProvider({
     if (updateUrl) {
       storage.set(LANG_KEY, lang);
       const url = pathForLang(lang) + window.location.search + window.location.hash;
-      window.history.pushState({ lang }, '', url);
+      safePushState({ lang }, url);
     }
   }, []);
 
