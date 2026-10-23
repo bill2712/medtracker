@@ -1,13 +1,57 @@
 <!doctype html>
-<html lang="en">
+<html lang="__APP_LANG__">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My Google AI Studio App</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<!--seo-head-->
+    <meta name="theme-color" content="#059669" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#020617" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="application-name" content="MedTracker" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="MedTracker" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="format-detection" content="telephone=no" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <script>
+      // Apply the saved theme before first paint to avoid a light/dark flash.
+      (function () {
+        try {
+          var s = JSON.parse(localStorage.getItem('mt.settings') || '{}');
+          var dark = s.theme === 'dark' || (s.theme !== 'light' && matchMedia('(prefers-color-scheme: dark)').matches);
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
+    <style>
+      /* Pre-render styles for the static content shown before the app loads. */
+      body { margin: 0; background: #f8fafc; color: #0f172a; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+      .dark body { background: #020617; color: #e2e8f0; }
+      .seo-fallback { max-width: 46rem; margin: 0 auto; padding: 2rem 1rem 4rem; line-height: 1.6; }
+      .seo-brand { font-weight: 700; color: #047857; margin: 0 0 1.5rem; }
+      .seo-fallback h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 0.75rem; }
+      .seo-fallback h2 { font-size: 1.25rem; margin: 2rem 0 0.75rem; }
+      .seo-fallback h3 { font-size: 1rem; margin: 0 0 0.25rem; }
+      .seo-intro { font-size: 1.125rem; color: #475569; }
+      .dark .seo-intro { color: #94a3b8; }
+      .seo-features { list-style: none; padding: 0; display: grid; gap: 0.75rem; grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr)); }
+      .seo-features li { background: #fff; border: 1px solid #e2e8f0; border-radius: 1rem; padding: 1rem; }
+      .dark .seo-features li { background: #0f172a; border-color: #1e293b; }
+      .seo-features p, .seo-faq dd { margin: 0; color: #475569; }
+      .dark .seo-features p, .dark .seo-faq dd { color: #94a3b8; }
+      .seo-faq dt { font-weight: 600; margin-top: 1rem; }
+      .seo-note { margin-top: 2rem; font-size: 0.875rem; color: #64748b; }
+      .seo-langs { margin-top: 1.5rem; font-size: 0.875rem; }
+      .seo-langs a { color: #047857; }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root"><!--seo-body--></div>
+    <noscript><p style="text-align:center;padding:1rem">MedTracker needs JavaScript to run.</p></noscript>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
-

@@ -1,1 +1,45 @@
 @import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", "Noto Sans", Arial,
+    sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+}
+
+/* CJK fonts per language so Han characters use the right regional glyphs. */
+:lang(zh-Hant) {
+  font-family: ui-sans-serif, system-ui, -apple-system, "PingFang HK", "PingFang TC", "Noto Sans HK", "Noto Sans TC",
+    "Microsoft JhengHei", sans-serif;
+}
+:lang(zh-Hans) {
+  font-family: ui-sans-serif, system-ui, -apple-system, "PingFang SC", "Noto Sans SC", "Microsoft YaHei", sans-serif;
+}
+:lang(ja) {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Noto Sans JP",
+    "Yu Gothic UI", Meiryo, sans-serif;
+}
+:lang(ko) {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif;
+}
+
+html {
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  @apply bg-slate-50 text-slate-900 antialiased dark:bg-slate-950 dark:text-slate-100;
+}
+
+input[type="number"] {
+  -moz-appearance: textfield;
+}
+
+@media print {
+  header,
+  nav,
+  footer {
+    display: none !important;
+  }
+}
