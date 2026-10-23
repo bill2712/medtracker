@@ -3,567 +3,473 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
-import { Clock, CalendarPlus, Settings, Pill, CheckCircle2, Plus, X, Trash2, History } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { MotionConfig } from 'motion/react';
+import { History, House, Languages, Pill, Plus, Settings as SettingsIcon, WifiOff, type LucideIcon } from 'lucide-react';
+import type { DoseLog, Medication, MedColor, Settings, View } from './types';
+import { MED_COLORS } from './types';
+import { useI18n, pathForLang } from './i18n';
+import { LANGUAGES, isLang } from './i18n/config';
+import { useMedStore } from './hooks/useMedStore';
+import { useDoseReminders, useInstallPrompt, useNow, useOnline, useTheme } from './hooks/useAppHooks';
+import { getStatus, needsEarlyConfirm } from './lib/schedule';
+import { clearAll, createBackup, DEFAULT_SETTINGS, loadSettings, parseBackup, saveSettings } from './lib/storage';
+import { buildICS } from './lib/ics';
+import { displayName, shareSummary } from './lib/describe';
+import { downloadFile, readFile, safeFilename, shareText } from './lib/files';
+import { requestPermission, showNotification } from './lib/notifications';
+import { sampleMeds } from './lib/sample';
+import { ToastProvider, useToast } from './components/Toast';
+import { ConfirmDialog, cx } from './components/ui';
+import { TodayView } from './components/TodayView';
+import { HistoryView } from './components/HistoryView';
+import { SettingsView } from './components/SettingsView';
+import { MedicationForm } from './components/MedicationForm';
+import { DoseLogModal } from './components/DoseLogModal';
+import { RefillModal } from './components/RefillModal';
 
-type Medication = {
-  id: string;
-  name: string;
-  totalPills: number;
-  pillsTaken: number;
-  dosage: number;
-  frequencyHours: number;
-  lastTakenTime: string | null;
-  history?: string[];
+const VIEWS: View[] = ['today', 'history', 'settings'];
+const viewFromHash = (): View => {
+  const v = window.location.hash.replace(/^#\/?/, '') as View;
+  return VIEWS.includes(v) ? v : 'today';
 };
 
-const defaultMeds: Medication[] = [
-  {
-    id: '1',
-    name: 'Antibiotics (抗生素)',
-    totalPills: 21,
-    pillsTaken: 0,
-    dosage: 1,
-    frequencyHours: 8,
-    lastTakenTime: null,
-    history: [],
-  },
-  {
-    id: '2',
-    name: 'Ibrufen (布洛芬)',
-    totalPills: 20,
-    pillsTaken: 0,
-    dosage: 1,
-    frequencyHours: 6,
-    lastTakenTime: null,
-    history: [],
-  },
-  {
-    id: '3',
-    name: 'Telfast (退敏快)',
-    totalPills: 10,
-    pillsTaken: 0,
-    dosage: 1,
-    frequencyHours: 24,
-    lastTakenTime: null,
-    history: [],
-  }
-];
-
-const getNextDoseTime = (med: Medication): Date | null => {
-  const history = med.history || (med.lastTakenTime ? [med.lastTakenTime] : []);
-  const lastTime = history.length > 0 ? history[history.length - 1] : null;
-  if (!lastTime) return null;
-  return new Date(new Date(lastTime).getTime() + med.frequencyHours * 60 * 60 * 1000);
-};
-
-const getRemainingDays = (med: Medication): number => {
-  const pillsLeft = Math.max(0, med.totalPills - med.pillsTaken);
-  if (pillsLeft === 0) return 0;
-  const dosesLeft = pillsLeft / med.dosage;
-  const hoursLeft = dosesLeft * med.frequencyHours;
-  return +(hoursLeft / 24).toFixed(1);
-};
-
-const formatTime = (date: Date) => {
-  return date.toLocaleTimeString('zh-HK', { hour: '2-digit', minute: '2-digit' });
-};
-
-const formatDate = (date: Date) => {
-  return date.toLocaleDateString('zh-HK', { month: 'short', day: 'numeric' });
-};
-
-const generateICS = (med: Medication) => {
-  const nextDose = getNextDoseTime(med);
-  if (!nextDose) {
-    alert('請先服用一次藥物以計算下次服藥時間 (Please take a dose first to calculate next dose time)');
-    return;
-  }
-  
-  const endTime = new Date(nextDose.getTime() + 15 * 60 * 1000); // 15 mins
-  
-  const formatICSDate = (date: Date) => {
-    return date.toISOString().replace(/[-:]/g, '').split('.')[0] + 'Z';
-  };
-
-  const icsContent = [
-    'BEGIN:VCALENDAR',
-    'VERSION:2.0',
-    'PRODID:-//MedTracker//HK',
-    'CALSCALE:GREGORIAN',
-    'BEGIN:VEVENT',
-    `DTSTART:${formatICSDate(nextDose)}`,
-    `DTEND:${formatICSDate(endTime)}`,
-    `SUMMARY:💊 食藥提醒: ${med.name}`,
-    `DESCRIPTION:夠鐘食藥啦！需要服用 ${med.dosage} 粒 ${med.name}。`,
-    'BEGIN:VALARM',
-    'TRIGGER:-PT0M',
-    'ACTION:DISPLAY',
-    `DESCRIPTION:💊 食藥提醒: ${med.name}`,
-    'END:VALARM',
-    'END:VEVENT',
-    'END:VCALENDAR'
-  ].join('\r\n');
-
-  const blob = new Blob([icsContent], { type: 'text/calendar;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.setAttribute('download', `Reminder_${med.name}.ics`);
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-};
-
-function MedicationCard({ med, onTake, onEdit, onCalendar, onEditDose }: { med: Medication, onTake: () => void, onEdit: () => void, onCalendar: () => void, onEditDose: () => void }) {
-  const [now, setNow] = useState(new Date());
+function useHashView() {
+  const [view, setView] = useState<View>(viewFromHash);
   useEffect(() => {
-    const timer = setInterval(() => setNow(new Date()), 10000);
-    return () => clearInterval(timer);
+    const onHash = () => setView(viewFromHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
   }, []);
+  const go = useCallback((v: View) => {
+    const hash = v === 'today' ? '' : `#/${v}`;
+    if (window.location.hash !== hash) {
+      window.history.pushState(null, '', window.location.pathname + window.location.search + hash);
+      setView(v);
+    }
+    window.scrollTo({ top: 0 });
+  }, []);
+  return [view, go] as const;
+}
 
-  const nextDose = getNextDoseTime(med);
-  const isCompleted = med.pillsTaken >= med.totalPills;
-  const isEarly = nextDose ? now < nextDose : false;
-  const canTake = !isCompleted && !isEarly;
-  
+type Confirm =
+  | { kind: 'early'; med: Medication; due: Date }
+  | { kind: 'delete'; med: Medication }
+  | { kind: 'reset' };
+
+function Shell() {
+  const { m, f, t, lang, setLang } = useI18n();
+  const toast = useToast();
+  const store = useMedStore();
+  const { meds } = store;
+  const now = useNow();
+  const online = useOnline();
+  const install = useInstallPrompt();
+  const [view, go] = useHashView();
+  const [settings, setSettings] = useState<Settings>(loadSettings);
+
+  const [editing, setEditing] = useState<{ med: Medication | null } | null>(null);
+  const [logMed, setLogMed] = useState<Medication | null>(null);
+  const [refillMed, setRefillMed] = useState<Medication | null>(null);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  // Keep the last dialog's text on screen while it animates out.
+  const lastConfirm = useRef<Confirm | null>(null);
+  if (confirm) lastConfirm.current = confirm;
+  const shown = confirm ?? lastConfirm.current;
+
+  useTheme(settings.theme);
+  useEffect(() => saveSettings(settings), [settings]);
+
+  useDoseReminders(meds, settings.notifications, (med) => ({
+    title: t(m.notify.title, { name: displayName(med) }),
+    body:
+      t(m.notify.body, { amount: f.amount(med.dosage, med.form) }) +
+      (med.instructions !== 'none' ? ` ${m.instructions[med.instructions]}.` : ''),
+  }));
+
+  // Tab title shows how many doses need attention.
+  const attention = meds.filter((x) => ['due', 'overdue'].includes(getStatus(x, now).status)).length;
+  useEffect(() => {
+    document.title = (attention ? `(${attention}) ` : '') + m.seo.title;
+  }, [attention, m]);
+
+  // A new service worker took over: offer a reload.
+  useEffect(() => {
+    if (!('serviceWorker' in navigator)) return;
+    const hadController = !!navigator.serviceWorker.controller;
+    const onChange = () => {
+      if (hadController) toast({ message: m.update, tone: 'info', action: { label: m.reload, onClick: () => window.location.reload() }, duration: 15000 });
+    };
+    navigator.serviceWorker.addEventListener('controllerchange', onChange);
+    return () => navigator.serviceWorker.removeEventListener('controllerchange', onChange);
+  }, [m, toast]);
+
+  const nextColor = useMemo<MedColor>(() => {
+    const used = new Set(meds.map((x) => x.color));
+    return MED_COLORS.find((c) => !used.has(c)) ?? MED_COLORS[meds.length % MED_COLORS.length];
+  }, [meds]);
+
+  const doTake = useCallback(
+    (med: Medication) => {
+      const logId = store.logDose(med.id);
+      navigator.vibrate?.(30);
+      toast({
+        message: t(m.toast.taken, { name: med.name }),
+        action: { label: m.toast.undo, onClick: () => store.removeLog(med.id, logId) },
+      });
+    },
+    [store, toast, m, t],
+  );
+
+  const handlers = useMemo(
+    () => ({
+      onTake: (med: Medication) => {
+        const due = needsEarlyConfirm(med, Date.now());
+        if (due) setConfirm({ kind: 'early', med, due });
+        else doTake(med);
+      },
+      onSkip: (med: Medication) => {
+        const logId = store.logDose(med.id, { skipped: true });
+        toast({
+          message: t(m.toast.skipped, { name: med.name }),
+          tone: 'info',
+          action: { label: m.toast.undo, onClick: () => store.removeLog(med.id, logId) },
+        });
+      },
+      onEdit: (med: Medication) => setEditing({ med }),
+      onLog: (med: Medication) => setLogMed(med),
+      onRefill: (med: Medication) => setRefillMed(med),
+      onCalendar: (med: Medication) => {
+        const ics = buildICS([med], m, f);
+        if (!ics) {
+          toast({ message: m.toast.calendarEmpty, tone: 'info' });
+          return;
+        }
+        downloadFile(`medtracker-${safeFilename(med.name)}.ics`, ics, 'text/calendar;charset=utf-8');
+        toast({ message: m.toast.calendar });
+      },
+    }),
+    [doTake, store, toast, m, f, t],
+  );
+
+  const removeLogWithUndo = (med: Medication, log: DoseLog) => {
+    store.removeLog(med.id, log.id);
+    toast({
+      message: m.toast.saved,
+      tone: 'info',
+      action: { label: m.toast.undo, onClick: () => store.restoreLog(med.id, log) },
+    });
+  };
+
+  const deleteMed = (med: Medication) => {
+    const removed = store.remove(med.id);
+    setEditing(null);
+    if (removed) {
+      toast({
+        message: t(m.toast.deleted, { name: med.name }),
+        tone: 'info',
+        action: { label: m.toast.undo, onClick: () => store.restore(removed.med, removed.index) },
+      });
+    }
+  };
+
+  const settingsActions = {
+    onTheme: (theme: Settings['theme']) => setSettings((s) => ({ ...s, theme })),
+    onNotifications: async (on: boolean) => {
+      if (!on) {
+        setSettings((s) => ({ ...s, notifications: false }));
+        return;
+      }
+      const permission = await requestPermission();
+      if (permission === 'granted') {
+        setSettings((s) => ({ ...s, notifications: true }));
+        toast({ message: m.toast.notifOn });
+      } else {
+        setSettings((s) => ({ ...s, notifications: false }));
+        toast({ message: m.toast.notifBlocked, tone: 'error' });
+      }
+    },
+    onTestNotification: () => void showNotification(m.app.name, m.settings.testBody, 'test'),
+    onCalendarAll: () => {
+      const ics = buildICS(meds, m, f);
+      if (!ics) {
+        toast({ message: m.toast.calendarEmpty, tone: 'info' });
+        return;
+      }
+      downloadFile('medtracker-reminders.ics', ics, 'text/calendar;charset=utf-8');
+      toast({ message: m.toast.calendar });
+    },
+    onExport: () => {
+      const date = new Date().toISOString().slice(0, 10);
+      downloadFile(`medtracker-backup-${date}.json`, JSON.stringify(createBackup(meds, settings), null, 2), 'application/json');
+      toast({ message: m.toast.exported });
+    },
+    onImport: async (file: File) => {
+      try {
+        const { medications, settings: imported } = parseBackup(await readFile(file));
+        const previous = meds;
+        store.setMeds(medications);
+        if (imported) setSettings((s) => ({ ...imported, notifications: s.notifications }));
+        toast({
+          message: f.plural(m.toast.imported, medications.length),
+          action: { label: m.toast.undo, onClick: () => store.setMeds(previous) },
+        });
+      } catch {
+        toast({ message: m.toast.importFailed, tone: 'error' });
+      }
+    },
+    onShare: async () => {
+      const result = await shareText(m.share.title, shareSummary(meds, m, f));
+      if (result === 'copied') toast({ message: m.toast.copied });
+    },
+    onReset: () => setConfirm({ kind: 'reset' }),
+  };
+
+  const openAdd = () => setEditing({ med: null });
+
+  const NAV: { view: View; label: string; icon: LucideIcon }[] = [
+    { view: 'today', label: m.nav.today, icon: House },
+    { view: 'history', label: m.nav.history, icon: History },
+    { view: 'settings', label: m.nav.settings, icon: SettingsIcon },
+  ];
+
   return (
-    <div className={`bg-white rounded-2xl shadow-sm border ${isCompleted ? 'border-emerald-200 bg-emerald-50/30' : 'border-slate-100'} p-5 mb-4`}>
-      <div className="flex justify-between items-start mb-4">
-        <div>
-          <h3 className="text-lg font-semibold text-slate-800">{med.name}</h3>
-          <p className="text-sm text-slate-500 mt-1">
-            每次 {med.dosage} 粒 • 每 {med.frequencyHours} 小時一次
-          </p>
-        </div>
-        <button onClick={onEdit} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-50 rounded-full transition-colors">
-          <Settings size={20} />
-        </button>
-      </div>
+    <div className="min-h-dvh bg-slate-50 text-slate-900 dark:bg-slate-950 dark:text-slate-100">
+      <a
+        href="#main"
+        className="sr-only z-[70] rounded-lg bg-emerald-600 px-4 py-2 text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4"
+      >
+        {m.a11y.skip}
+      </a>
 
-      {/* Progress */}
-      <div className="mb-4">
-        <div className="flex justify-between text-sm mb-1">
-          <span className="text-slate-600">進度 (已服/總數)</span>
-          <span className="font-medium text-slate-800">{med.pillsTaken} / {med.totalPills} 粒</span>
-        </div>
-        <div className="w-full bg-slate-100 rounded-full h-2.5 overflow-hidden">
-          <div 
-            className={`h-2.5 rounded-full transition-all duration-500 ${isCompleted ? 'bg-emerald-400' : 'bg-emerald-500'}`}
-            style={{ width: `${Math.min(100, (med.pillsTaken / med.totalPills) * 100)}%` }}
-          ></div>
-        </div>
-        <div className="flex justify-between text-xs text-slate-500 mt-2">
-          <span>剩餘: {Math.max(0, med.totalPills - med.pillsTaken)} 粒</span>
-          <span>預計剩餘: {getRemainingDays(med)} 日</span>
-        </div>
-      </div>
+      <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/85 pt-[env(safe-area-inset-top)] backdrop-blur-lg dark:border-slate-800 dark:bg-slate-950/85">
+        <div className="mx-auto flex h-16 max-w-6xl items-center gap-3 px-4">
+          <a
+            href={pathForLang(lang)}
+            onClick={(e) => {
+              e.preventDefault();
+              go('today');
+            }}
+            className="flex items-center gap-2 rounded-lg text-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 dark:text-emerald-400"
+          >
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-600 text-white shadow-sm">
+              <Pill size={20} aria-hidden="true" />
+            </span>
+            <span className="text-lg font-bold tracking-tight text-slate-900 dark:text-white">{m.app.name}</span>
+          </a>
 
-      {/* Next Dose Info */}
-      {!isCompleted && (
-        <div className={`rounded-xl p-3 mb-4 flex items-center gap-3 ${isEarly ? 'bg-amber-50' : 'bg-slate-50'}`}>
-          <Clock className={isEarly ? "text-amber-500" : "text-indigo-500"} size={20} />
-          <div>
-            <p className={`text-xs ${isEarly ? 'text-amber-600/70' : 'text-slate-500'}`}>下次服藥時間</p>
-            <p className={`text-sm font-medium ${isEarly ? 'text-amber-700' : 'text-slate-800'}`}>
-              {nextDose ? `${formatDate(nextDose)} ${formatTime(nextDose)}` : '尚未開始服藥'}
-            </p>
+          <nav aria-label={m.nav.main} className="ml-6 hidden gap-1 md:flex">
+            {NAV.map((n) => (
+              <button
+                key={n.view}
+                type="button"
+                onClick={() => go(n.view)}
+                aria-current={view === n.view ? 'page' : undefined}
+                className={cx(
+                  'inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-colors',
+                  view === n.view
+                    ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-500/10 dark:text-emerald-200'
+                    : 'text-slate-600 hover:bg-slate-100 dark:text-slate-400 dark:hover:bg-slate-800',
+                )}
+              >
+                <n.icon size={18} aria-hidden="true" /> {n.label}
+              </button>
+            ))}
+          </nav>
+
+          <div className="ml-auto flex items-center gap-2">
+            <label className="relative inline-flex items-center">
+              <span className="sr-only">{m.settings.language}</span>
+              <Languages size={16} className="pointer-events-none absolute left-2.5 text-slate-500" aria-hidden="true" />
+              <select
+                value={lang}
+                onChange={(e) => isLang(e.target.value) && void setLang(e.target.value)}
+                className="h-10 appearance-none rounded-xl border border-slate-200 bg-white pl-8 pr-3 text-sm font-medium text-slate-700 hover:border-slate-300 focus:outline-none focus:ring-2 focus:ring-emerald-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+              >
+                {LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code} lang={l.code}>
+                    {l.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={openAdd}
+              className="hidden h-10 items-center gap-1.5 rounded-xl bg-emerald-600 px-4 text-sm font-semibold text-white shadow-sm hover:bg-emerald-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 md:inline-flex dark:focus-visible:ring-offset-slate-950"
+            >
+              <Plus size={18} aria-hidden="true" /> {m.nav.add}
+            </button>
           </div>
         </div>
-      )}
-
-      {isCompleted && (
-        <div className="bg-emerald-50 text-emerald-700 rounded-xl p-3 mb-4 flex items-center gap-3">
-          <CheckCircle2 size={20} />
-          <p className="text-sm font-medium">已完成所有療程</p>
-        </div>
-      )}
-
-      {/* Actions */}
-      <div className="flex gap-2">
-        <button 
-          onClick={onTake}
-          disabled={!canTake}
-          className={`flex-1 py-3 rounded-xl font-medium flex items-center justify-center gap-2 transition-colors ${
-            isCompleted ? 'bg-slate-200 text-slate-400' : 
-            isEarly ? 'bg-amber-100 text-amber-600' : 
-            'bg-emerald-500 hover:bg-emerald-600 text-white'
-          }`}
-        >
-          <CheckCircle2 size={20} />
-          {isCompleted ? '已完成' : isEarly ? '未到時間' : '確認服藥'}
-        </button>
-        
-        <button 
-          onClick={onEditDose}
-          className="px-4 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl flex items-center justify-center transition-colors"
-          title="修改/補加服藥紀錄"
-        >
-          <History size={20} />
-        </button>
-
-        {!isCompleted && (
-          <button 
-            onClick={onCalendar}
-            className="px-4 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center transition-colors"
-            title="加入行事曆提醒"
-          >
-            <CalendarPlus size={20} />
-          </button>
+        {!online && (
+          <p role="status" className="flex items-center justify-center gap-2 bg-slate-800 px-4 py-1.5 text-xs font-medium text-white dark:bg-slate-200 dark:text-slate-900">
+            <WifiOff size={14} aria-hidden="true" /> {m.offline}
+          </p>
         )}
-      </div>
-    </div>
-  );
-}
+      </header>
 
-const EditDoseModal = ({ med, onSave, onClose }: { med: Medication, onSave: (h: string[], p: number) => void, onClose: () => void }) => {
-  const initialHistory = med.history || (med.lastTakenTime ? [med.lastTakenTime] : []);
-  const [localHistory, setLocalHistory] = useState<string[]>(initialHistory);
-  
-  const formatForInput = (iso: string) => {
-    if (!iso) return '';
-    const d = new Date(iso);
-    const tzOffset = d.getTimezoneOffset() * 60000;
-    return new Date(d.getTime() - tzOffset).toISOString().slice(0, 16);
-  };
+      <main id="main" tabIndex={-1} className="mx-auto max-w-6xl px-4 pb-32 pt-6 focus:outline-none md:pb-16">
+        {view === 'today' && (
+          <TodayView
+            meds={meds}
+            now={now}
+            handlers={handlers}
+            onAdd={openAdd}
+            onSample={() => {
+              store.setMeds(sampleMeds(m));
+              toast({ message: m.toast.sampleAdded });
+            }}
+          />
+        )}
+        {view === 'history' && <HistoryView meds={meds} now={now} onRemoveLog={removeLogWithUndo} />}
+        {view === 'settings' && (
+          <SettingsView settings={settings} actions={settingsActions} install={install} hasMeds={meds.length > 0} />
+        )}
 
-  const handleTimeChange = (index: number, newTimeStr: string) => {
-    if (!newTimeStr) return;
-    const newTime = new Date(newTimeStr).toISOString();
-    const updated = [...localHistory];
-    updated[index] = newTime;
-    setLocalHistory(updated);
-  };
+        <footer className="mt-16 border-t border-slate-200 pt-6 text-center text-xs text-slate-500 dark:border-slate-800 dark:text-slate-500">
+          <p className="mx-auto max-w-xl">{m.settings.disclaimer}</p>
+          <nav aria-label={m.settings.language} className="mt-3 flex flex-wrap justify-center gap-x-3 gap-y-1">
+            {LANGUAGES.map((l) => (
+              <a
+                key={l.code}
+                href={pathForLang(l.code)}
+                hrefLang={l.code}
+                lang={l.code}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void setLang(l.code);
+                }}
+                className={cx('hover:text-emerald-700 hover:underline dark:hover:text-emerald-400', l.code === lang && 'font-semibold text-slate-700 dark:text-slate-300')}
+              >
+                {l.label}
+              </a>
+            ))}
+          </nav>
+        </footer>
+      </main>
 
-  const handleRemove = (index: number) => {
-    const updated = localHistory.filter((_, i) => i !== index);
-    setLocalHistory(updated);
-  };
+      {view === 'today' && meds.length > 0 && (
+        <button
+          type="button"
+          onClick={openAdd}
+          aria-label={m.nav.add}
+          className="fixed bottom-[calc(5.25rem+env(safe-area-inset-bottom))] right-4 z-30 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-lg shadow-emerald-600/30 transition-transform hover:bg-emerald-700 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 md:hidden dark:focus-visible:ring-offset-slate-950"
+        >
+          <Plus size={26} aria-hidden="true" />
+        </button>
+      )}
 
-  const handleAddRecord = () => {
-    const newTime = new Date().toISOString();
-    setLocalHistory([...localHistory, newTime]);
-  };
-
-  const handleSave = () => {
-    // Sort history chronologically
-    const sortedHistory = [...localHistory].sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
-    
-    // Calculate new pills taken based on difference in history length
-    const diff = initialHistory.length - sortedHistory.length;
-    const calculatedPills = med.pillsTaken - (diff * med.dosage);
-    const newPillsTaken = Math.min(med.totalPills, Math.max(0, calculatedPills));
-    
-    onSave(sortedHistory, newPillsTaken);
-  };
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[80vh]"
+      <nav
+        aria-label={m.nav.main}
+        className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/80 bg-white/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg md:hidden dark:border-slate-800 dark:bg-slate-950/90"
       >
-        <div className="p-4 border-b border-slate-100 flex justify-between items-center shrink-0">
-          <h2 className="text-lg font-semibold text-slate-800">服藥紀錄 ({localHistory.length})</h2>
-          <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600 rounded-full">
-            <X size={20} />
-          </button>
-        </div>
-        
-        <div className="p-5 overflow-y-auto space-y-4 grow">
-          {localHistory.length === 0 ? (
-            <p className="text-center text-slate-500 py-4">暫無服藥紀錄</p>
-          ) : (
-            localHistory.map((isoTime, index) => (
-              <div key={index} className="flex items-center gap-2 bg-slate-50 p-3 rounded-xl">
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-slate-500 mb-1">第 {index + 1} 次服藥</label>
-                  <input 
-                    type="datetime-local" 
-                    value={formatForInput(isoTime)}
-                    onChange={e => handleTimeChange(index, e.target.value)}
-                    className="w-full border border-slate-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
-                  />
-                </div>
-                <button 
-                  onClick={() => handleRemove(index)}
-                  className="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors mt-4"
-                  title="移除此紀錄"
-                >
-                  <Trash2 size={18} />
-                </button>
-              </div>
-            ))
-          )}
-          
-          <button
-            onClick={handleAddRecord}
-            className="w-full py-3 border-2 border-dashed border-slate-200 text-slate-500 rounded-xl hover:bg-slate-50 hover:border-emerald-300 hover:text-emerald-600 transition-colors flex items-center justify-center gap-2 mt-2"
-          >
-            <Plus size={18} /> 補加服藥紀錄
-          </button>
+        <ul className="mx-auto grid max-w-md grid-cols-3">
+          {NAV.map((n) => (
+            <li key={n.view}>
+              <button
+                type="button"
+                onClick={() => go(n.view)}
+                aria-current={view === n.view ? 'page' : undefined}
+                className={cx(
+                  'flex h-16 w-full flex-col items-center justify-center gap-1 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-emerald-500',
+                  view === n.view ? 'text-emerald-700 dark:text-emerald-400' : 'text-slate-500 dark:text-slate-400',
+                )}
+              >
+                <span className={cx('rounded-full px-4 py-1 transition-colors', view === n.view && 'bg-emerald-100 dark:bg-emerald-500/15')}>
+                  <n.icon size={22} aria-hidden="true" />
+                </span>
+                {n.label}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </nav>
 
-          <p className="text-xs text-slate-500 mt-2">
-            修改時間後，系統會自動重新計算下一次的服藥時間。新增或移除紀錄會自動增減已服用的數量。
-          </p>
-        </div>
+      <MedicationForm
+        open={!!editing}
+        med={editing?.med ?? null}
+        defaultColor={nextColor}
+        onClose={() => setEditing(null)}
+        onDelete={(med) => setConfirm({ kind: 'delete', med })}
+        onSave={(med, isNew) => {
+          store.upsert(med);
+          setEditing(null);
+          toast({ message: isNew ? t(m.toast.added, { name: med.name }) : m.toast.saved });
+        }}
+      />
 
-        <div className="p-4 border-t border-slate-100 flex justify-end gap-2 bg-slate-50 shrink-0">
-          <button 
-            onClick={onClose}
-            className="px-4 py-2 text-slate-600 hover:bg-slate-200 bg-slate-100 rounded-xl text-sm font-medium transition-colors"
-          >
-            取消
-          </button>
-          <button 
-            onClick={handleSave}
-            className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-sm font-medium transition-colors"
-          >
-            儲存
-          </button>
-        </div>
-      </motion.div>
-    </div>
-  );
-}
+      <DoseLogModal
+        med={logMed}
+        onClose={() => setLogMed(null)}
+        onSave={(id, logs) => {
+          store.setLogs(id, logs);
+          setLogMed(null);
+          toast({ message: m.toast.saved });
+        }}
+      />
 
-const EditModal = ({ med, onSave, onClose, onDelete }: { med: Medication, onSave: (m: Medication) => void, onClose: () => void, onDelete: (id: string) => void }) => {
-  const [formData, setFormData] = useState<Medication>(med);
+      <RefillModal
+        med={refillMed}
+        onClose={() => setRefillMed(null)}
+        onRefill={(med, amount) => {
+          store.refill(med.id, amount);
+          setRefillMed(null);
+          toast({ message: t(m.toast.refilled, { name: med.name, amount: f.amount(amount, med.form) }) });
+        }}
+      />
 
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-      <motion.div 
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="bg-white rounded-2xl w-full max-w-md overflow-hidden"
-      >
-        <div className="p-4 border-b border-slate-100 flex justify-between items-center">
-          <h2 className="text-lg font-semibold text-slate-800">
-            {med.id ? '編輯藥物' : '新增藥物'}
-          </h2>
-          <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600 rounded-full">
-            <X size={20} />
-          </button>
-        </div>
-        
-        <div className="p-5 space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-slate-700 mb-1">藥物名稱</label>
-            <input 
-              type="text" 
-              value={formData.name}
-              onChange={e => setFormData({...formData, name: e.target.value})}
-              className="w-full border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-            />
-          </div>
-          
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">總數量 (粒)</label>
-              <input 
-                type="number" 
-                value={formData.totalPills}
-                onChange={e => setFormData({...formData, totalPills: parseInt(e.target.value) || 0})}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">已服數量 (粒)</label>
-              <input 
-                type="number" 
-                value={formData.pillsTaken}
-                onChange={e => setFormData({...formData, pillsTaken: parseInt(e.target.value) || 0})}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
-          </div>
+      <ConfirmDialog
+        open={confirm?.kind === 'early'}
+        title={shown?.kind === 'early' && shown.med.schedule.type === 'asNeeded' ? m.confirm.prnTitle : m.confirm.earlyTitle}
+        body={
+          shown?.kind === 'early'
+            ? t(shown.med.schedule.type === 'asNeeded' ? m.confirm.prnBody : m.confirm.earlyBody, {
+                name: shown.med.name,
+                time: f.relativeDateTime(shown.due, new Date(now)),
+              })
+            : ''
+        }
+        confirmLabel={m.confirm.takeAnyway}
+        onConfirm={() => confirm?.kind === 'early' && doTake(confirm.med)}
+        onClose={() => setConfirm(null)}
+      />
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">每次劑量 (粒)</label>
-              <input 
-                type="number" 
-                value={formData.dosage}
-                onChange={e => setFormData({...formData, dosage: parseInt(e.target.value) || 0})}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-700 mb-1">頻率 (每X小時)</label>
-              <input 
-                type="number" 
-                value={formData.frequencyHours}
-                onChange={e => setFormData({...formData, frequencyHours: parseInt(e.target.value) || 0})}
-                className="w-full border border-slate-200 rounded-xl px-3 py-2 focus:outline-none focus:ring-2 focus:ring-emerald-500"
-              />
-            </div>
-          </div>
-        </div>
+      <ConfirmDialog
+        open={confirm?.kind === 'delete'}
+        title={m.confirm.deleteTitle}
+        body={shown?.kind === 'delete' ? t(m.confirm.deleteBody, { name: shown.med.name }) : ''}
+        confirmLabel={m.confirm.delete}
+        tone="danger"
+        onConfirm={() => confirm?.kind === 'delete' && deleteMed(confirm.med)}
+        onClose={() => setConfirm(null)}
+      />
 
-        <div className="p-4 border-t border-slate-100 flex justify-between bg-slate-50">
-          {med.id ? (
-            <button 
-              onClick={() => onDelete(med.id)}
-              className="text-red-500 hover:bg-red-50 px-4 py-2 rounded-xl text-sm font-medium transition-colors flex items-center gap-1"
-            >
-              <Trash2 size={16} /> 刪除
-            </button>
-          ) : <div></div>}
-          <div className="flex gap-2">
-            <button 
-              onClick={onClose}
-              className="px-4 py-2 text-slate-600 hover:bg-slate-200 bg-slate-100 rounded-xl text-sm font-medium transition-colors"
-            >
-              取消
-            </button>
-            <button 
-              onClick={() => onSave(formData)}
-              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white rounded-xl text-sm font-medium transition-colors"
-            >
-              儲存
-            </button>
-          </div>
-        </div>
-      </motion.div>
+      <ConfirmDialog
+        open={confirm?.kind === 'reset'}
+        title={m.confirm.resetTitle}
+        body={m.confirm.resetBody}
+        confirmLabel={m.confirm.erase}
+        tone="danger"
+        onConfirm={() => {
+          clearAll();
+          store.setMeds([]);
+          setSettings(DEFAULT_SETTINGS);
+          toast({ message: m.toast.erased });
+          go('today');
+        }}
+        onClose={() => setConfirm(null)}
+      />
     </div>
   );
 }
 
 export default function App() {
-  const [medications, setMedications] = useState<Medication[]>(() => {
-    const saved = localStorage.getItem('medications');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch (e) {}
-    }
-    return defaultMeds;
-  });
-
-  const [editingMed, setEditingMed] = useState<Medication | null>(null);
-  const [editingDoseMed, setEditingDoseMed] = useState<Medication | null>(null);
-
-  useEffect(() => {
-    localStorage.setItem('medications', JSON.stringify(medications));
-  }, [medications]);
-
-  const handleTakeDose = (id: string) => {
-    setMedications(prev => prev.map(med => {
-      if (med.id === id) {
-        const newTaken = Math.min(med.totalPills, med.pillsTaken + med.dosage);
-        const now = new Date().toISOString();
-        const newHistory = [...(med.history || (med.lastTakenTime ? [med.lastTakenTime] : [])), now];
-        return {
-          ...med,
-          pillsTaken: newTaken,
-          lastTakenTime: now,
-          history: newHistory
-        };
-      }
-      return med;
-    }));
-  };
-
-  const handleUpdateDoseHistory = (id: string, newHistory: string[], newPillsTaken: number) => {
-    setMedications(prev => prev.map(med => {
-      if (med.id === id) {
-        return {
-          ...med,
-          history: newHistory,
-          pillsTaken: newPillsTaken,
-          lastTakenTime: newHistory.length > 0 ? newHistory[newHistory.length - 1] : null
-        };
-      }
-      return med;
-    }));
-    setEditingDoseMed(null);
-  };
-
-  const handleSaveEdit = (updatedMed: Medication) => {
-    setMedications(prev => {
-      if (!updatedMed.id) {
-        return [...prev, { ...updatedMed, id: crypto.randomUUID() }];
-      }
-      const exists = prev.find(m => m.id === updatedMed.id);
-      if (exists) {
-        return prev.map(m => m.id === updatedMed.id ? updatedMed : m);
-      } else {
-        return [...prev, updatedMed];
-      }
-    });
-    setEditingMed(null);
-  };
-
-  const handleDelete = (id: string) => {
-    setMedications(prev => prev.filter(m => m.id !== id));
-    setEditingMed(null);
-  };
-
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans pb-20">
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
-        <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-emerald-600">
-            <Pill size={24} />
-            <h1 className="text-xl font-bold">MedTracker</h1>
-          </div>
-          <button 
-            onClick={() => setEditingMed({ id: '', name: '', totalPills: 0, pillsTaken: 0, dosage: 1, frequencyHours: 8, lastTakenTime: null, history: [] })}
-            className="p-2 bg-emerald-50 text-emerald-600 rounded-full hover:bg-emerald-100 transition-colors"
-          >
-            <Plus size={20} />
-          </button>
-        </div>
-      </header>
-
-      <main className="max-w-md mx-auto p-4">
-        <AnimatePresence>
-          {medications.map(med => (
-            <motion.div
-              key={med.id}
-              layout
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.9 }}
-            >
-              <MedicationCard 
-                med={med} 
-                onTake={() => handleTakeDose(med.id)}
-                onEdit={() => setEditingMed(med)}
-                onCalendar={() => generateICS(med)}
-                onEditDose={() => setEditingDoseMed(med)}
-              />
-            </motion.div>
-          ))}
-        </AnimatePresence>
-        
-        {medications.length === 0 && (
-          <div className="text-center py-12 text-slate-500">
-            <Pill size={48} className="mx-auto mb-4 opacity-20" />
-            <p>目前沒有藥物記錄</p>
-            <p className="text-sm mt-1">點擊右上角新增藥物</p>
-          </div>
-        )}
-      </main>
-
-      {editingMed && (
-        <EditModal 
-          med={editingMed} 
-          onSave={handleSaveEdit} 
-          onClose={() => setEditingMed(null)} 
-          onDelete={handleDelete}
-        />
-      )}
-
-      {editingDoseMed && (
-        <EditDoseModal
-          med={editingDoseMed}
-          onSave={(history, pillsTaken) => handleUpdateDoseHistory(editingDoseMed.id, history, pillsTaken)}
-          onClose={() => setEditingDoseMed(null)}
-        />
-      )}
-    </div>
+    <MotionConfig reducedMotion="user">
+      <ToastProvider>
+        <Shell />
+      </ToastProvider>
+    </MotionConfig>
   );
 }
