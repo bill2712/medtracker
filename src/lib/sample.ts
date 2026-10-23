@@ -1,6 +1,6 @@
-import type { Medication } from '../types';
+import type { Appointment, DoctorNote, Medication } from '../types';
 import type { Messages } from '../i18n/locales/en';
-import { HOUR } from './schedule';
+import { DAY, HOUR } from './schedule';
 import { uid } from './storage';
 
 export function sampleMeds(m: Messages, now = Date.now()): Medication[] {
@@ -68,4 +68,28 @@ export function sampleMeds(m: Messages, now = Date.now()): Medication[] {
       createdAt: iso(now),
     },
   ];
+}
+
+/** A follow-up in 5 days, a past visit and a few notes, linked to the sample medications. */
+export function sampleVisits(m: Messages, meds: Medication[], now = Date.now()): { appointments: Appointment[]; notes: DoctorNote[] } {
+  const iso = (t: number) => new Date(t).toISOString();
+  const next = new Date(now + 5 * DAY);
+  next.setHours(10, 30, 0, 0);
+  const last = new Date(now - 26 * DAY);
+  last.setHours(15, 0, 0, 0);
+  const base = { doctor: m.sample.doctor, clinic: m.sample.clinic, location: m.sample.location };
+  const lastId = uid();
+  const antibiotic = meds.find((x) => x.name === m.sample.antibiotic);
+  const painkiller = meds.find((x) => x.name === m.sample.painkiller);
+  return {
+    appointments: [
+      { id: lastId, ...base, time: iso(last.getTime()), reminders: [1440], bring: '', outcome: '', done: true, createdAt: iso(now - 40 * DAY) },
+      { id: uid(), ...base, time: iso(next.getTime()), reminders: [1440, 120], bring: m.sample.bring, outcome: '', done: false, createdAt: iso(now) },
+    ],
+    notes: [
+      { id: uid(), text: m.sample.noteSymptom, kind: 'sideEffect', ...(antibiotic ? { medId: antibiotic.id } : {}), createdAt: iso(now - 2 * DAY) },
+      { id: uid(), text: m.sample.noteQuestion, kind: 'question', ...(painkiller ? { medId: painkiller.id } : {}), createdAt: iso(now - DAY) },
+      { id: uid(), text: m.sample.noteRequest, kind: 'request', createdAt: iso(now - 3 * HOUR) },
+    ],
+  };
 }

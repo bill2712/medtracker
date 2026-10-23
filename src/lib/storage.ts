@@ -2,6 +2,10 @@ import {
   INSTRUCTIONS,
   MED_COLORS,
   MED_FORMS,
+  NOTE_KINDS,
+  REMINDER_OPTIONS,
+  type Appointment,
+  type DoctorNote,
   type DoseLog,
   type Medication,
   type Schedule,
@@ -13,6 +17,8 @@ import { storage } from './safeStorage';
 const MEDS_KEY = 'mt.v2.medications';
 const SETTINGS_KEY = 'mt.settings';
 const LEGACY_KEY = 'medications';
+const APPTS_KEY = 'mt.v2.appointments';
+const NOTES_KEY = 'mt.v2.notes';
 
 export const DEFAULT_SETTINGS: Settings = { theme: 'system', notifications: false };
 
@@ -137,27 +143,90 @@ export function loadSettings(): Settings {
 export const saveSettings = (s: Settings) => storage.setJSON(SETTINGS_KEY, s);
 
 export function clearAll() {
-  for (const key of [MEDS_KEY, SETTINGS_KEY, LEGACY_KEY, 'mt.notified']) storage.remove(key);
+  for (const key of [MEDS_KEY, SETTINGS_KEY, LEGACY_KEY, APPTS_KEY, NOTES_KEY, 'mt.notified']) storage.remove(key);
 }
+
+export function normalizeAppointment(raw: any): Appointment | null {
+  if (!raw || typeof raw !== 'object' || !validIso(raw.time)) return null;
+  const doctor = str(raw.doctor).trim();
+  if (!doctor) return null;
+  const reminders = Array.isArray(raw.reminders)
+    ? [...new Set(raw.reminders.filter((r: unknown) => (REMINDER_OPTIONS as readonly unknown[]).includes(r)) as number[])]
+    : [1440];
+  return {
+    id: str(raw.id) || uid(),
+    doctor,
+    clinic: str(raw.clinic).trim(),
+    location: str(raw.location).trim(),
+    time: new Date(raw.time).toISOString(),
+    reminders: reminders.sort((a, b) => b - a),
+    bring: str(raw.bring),
+    outcome: str(raw.outcome),
+    done: raw.done === true,
+    createdAt: validIso(raw.createdAt) ? new Date(raw.createdAt).toISOString() : new Date().toISOString(),
+  };
+}
+
+export function normalizeNote(raw: any): DoctorNote | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const text = str(raw.text).trim();
+  if (!text) return null;
+  return {
+    id: str(raw.id) || uid(),
+    text,
+    kind: oneOf(NOTE_KINDS, raw.kind, 'symptom'),
+    ...(str(raw.medId) ? { medId: str(raw.medId) } : {}),
+    createdAt: validIso(raw.createdAt) ? new Date(raw.createdAt).toISOString() : new Date().toISOString(),
+    ...(raw.resolved === true ? { resolved: true } : {}),
+    ...(str(raw.apptId) ? { apptId: str(raw.apptId) } : {}),
+  };
+}
+
+const normalizeList = <T>(list: unknown, fn: (raw: unknown) => T | null): T[] =>
+  Array.isArray(list) ? list.map(fn).filter((x): x is T => x !== null) : [];
+
+export const normalizeAppointments = (list: unknown) =>
+  normalizeList(list, normalizeAppointment).sort((a, b) => Date.parse(a.time) - Date.parse(b.time));
+export const normalizeNotes = (list: unknown) => normalizeList(list, normalizeNote);
+
+export const loadAppointments = () => normalizeAppointments(storage.getJSON(APPTS_KEY));
+export const loadNotes = () => normalizeNotes(storage.getJSON(NOTES_KEY));
+export const saveAppointments = (a: Appointment[]) => storage.setJSON(APPTS_KEY, a);
+export const saveNotes = (n: DoctorNote[]) => storage.setJSON(NOTES_KEY, n);
+export const STORAGE_KEYS = { meds: MEDS_KEY, appts: APPTS_KEY, notes: NOTES_KEY };
 
 export type Backup = {
   app: 'MedTracker';
-  version: 2;
+  version: 3;
   exportedAt: string;
   medications: Medication[];
+  appointments: Appointment[];
+  notes: DoctorNote[];
   settings: Settings;
 };
 
-export const createBackup = (medications: Medication[], settings: Settings): Backup => ({
+export const createBackup = (
+  medications: Medication[],
+  appointments: Appointment[],
+  notes: DoctorNote[],
+  settings: Settings,
+): Backup => ({
   app: 'MedTracker',
-  version: 2,
+  version: 3,
   exportedAt: new Date().toISOString(),
   medications,
+  appointments,
+  notes,
   settings,
 });
 
 /** Accepts a backup object or a bare array (v1 data). Throws on invalid input. */
-export function parseBackup(text: string): { medications: Medication[]; settings?: Settings } {
+export function parseBackup(text: string): {
+  medications: Medication[];
+  appointments: Appointment[];
+  notes: DoctorNote[];
+  settings?: Settings;
+} {
   const data = JSON.parse(text);
   const list = Array.isArray(data) ? data : data?.medications;
   if (!Array.isArray(list)) throw new Error('invalid backup');
@@ -170,5 +239,11 @@ export function parseBackup(text: string): { medications: Medication[]; settings
           notifications: data.settings.notifications === true,
         }
       : undefined;
-  return { medications, settings };
+  const isObject = data && !Array.isArray(data);
+  return {
+    medications,
+    appointments: isObject ? normalizeAppointments(data.appointments) : [],
+    notes: isObject ? normalizeNotes(data.notes) : [],
+    settings,
+  };
 }

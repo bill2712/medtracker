@@ -14,8 +14,11 @@ A free, private, multilingual medication reminder and pill tracker. It runs full
 - **Pill counting**: progress for a course (e.g. antibiotics), quantity left, days of supply left, low-stock warnings and refills.
 - **Dose log editor**: fix times, mark doses as taken or skipped, add doses you forgot to log.
 - **History**: 7- and 30-day charts (with a table view), adherence %, and a day-by-day log.
+- **Doctor visits**: follow-up appointments (doctor, specialty, location, things to bring) with reminders 1 week, 1 day or 2 hours before, or at the time, and calendar export.
+- **Notes for your doctor**: jot down symptoms, side effects, questions and requests as they happen, optionally linked to a medication. Anything not discussed carries over to the next visit.
+- **Visit summary**: everything to discuss, points suggested from your records (missed doses, frequent as-needed use, refills, finished courses), a medication review since the last visit, and a things-to-bring list. Share or copy it in one tap; after the visit, record what the doctor said and book the next follow-up.
 - **Reminders**: browser notifications while the app is open or installed, and recurring calendar reminders (`.ics`) for Google, Apple and Outlook Calendar.
-- **Data tools**: backup and restore (JSON), share or copy the medication list, erase everything.
+- **Data tools**: backup and restore (JSON, including appointments and notes), share or copy the medication list, erase everything.
 - **UX**: light, dark and system themes; mobile bottom navigation; keyboard and screen-reader friendly dialogs; reduced-motion support.
 - **7 languages**: English, 繁體中文, 简体中文, 日本語, 한국어, Español, Français. The language is picked automatically from the browser and can be changed at any time.
 

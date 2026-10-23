@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Medication, Theme } from '../types';
+import type { Appointment, Medication, Theme } from '../types';
 import { getStatus } from '../lib/schedule';
 import { showNotification } from '../lib/notifications';
 import { storage } from '../lib/safeStorage';
@@ -128,4 +128,44 @@ export function useDoseReminders(
     }
     return () => timers.forEach((t) => window.clearTimeout(t));
   }, [meds, enabled]);
+}
+
+/** Notifies before each upcoming appointment at the chosen reminder offsets, while the page is alive. */
+export function useAppointmentReminders(
+  appointments: Appointment[],
+  enabled: boolean,
+  build: (a: Appointment) => { title: string; body: string },
+) {
+  const buildRef = useRef(build);
+  buildRef.current = build;
+
+  useEffect(() => {
+    if (!enabled || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+    const notified = storage.getJSON<Record<string, string>>(NOTIFIED_KEY) ?? {};
+    const timers: number[] = [];
+    const now = Date.now();
+
+    for (const a of appointments) {
+      if (a.done) continue;
+      const start = Date.parse(a.time);
+      if (start < now) continue;
+      const fire = (keys: string[]) => {
+        for (const k of keys) notified[k] = a.time;
+        storage.setJSON(NOTIFIED_KEY, notified);
+        const { title, body } = buildRef.current(a);
+        void showNotification(title, body, `appt-${a.id}`);
+      };
+      const missed: string[] = [];
+      for (const min of a.reminders) {
+        const key = `appt:${a.id}:${min}`;
+        if (notified[key] === a.time) continue;
+        const wait = start - min * 60_000 - now;
+        if (wait <= 0) missed.push(key);
+        else if (wait < 2_147_000_000) timers.push(window.setTimeout(() => fire([key]), wait));
+      }
+      // Reminders missed while the app was closed: one notification, as long as the visit has not started.
+      if (missed.length) fire(missed);
+    }
+    return () => timers.forEach((t) => window.clearTimeout(t));
+  }, [appointments, enabled]);
 }

@@ -1,4 +1,4 @@
-import type { Medication } from '../types';
+import type { Appointment, Medication } from '../types';
 import type { Messages } from '../i18n/locales/en';
 import type { Formatter } from '../i18n/format';
 import { fmt } from '../i18n/format';
@@ -113,6 +113,42 @@ export function buildICS(meds: Medication[], msgs: Messages, f: Formatter, now =
     'METHOD:PUBLISH',
     `X-WR-CALNAME:${escapeText(msgs.app.name)}`,
     ...events.flatMap((e) => vevent(e, stamp)),
+    'END:VCALENDAR',
+  ];
+  return lines.map(fold).join('\r\n') + '\r\n';
+}
+
+/** One appointment as an iCalendar event, with an alarm for each chosen reminder. */
+export function buildAppointmentICS(
+  appt: Appointment,
+  msgs: Messages,
+  description: string,
+  now = new Date(),
+): string {
+  const start = new Date(appt.time);
+  const alarms = (appt.reminders.length ? appt.reminders : [0]).flatMap((min) => [
+    'BEGIN:VALARM',
+    'ACTION:DISPLAY',
+    `TRIGGER:-PT${min}M`,
+    `DESCRIPTION:${escapeText(fmt(msgs.notify.apptTitle, { doctor: appt.doctor }))}`,
+    'END:VALARM',
+  ]);
+  const lines = [
+    'BEGIN:VCALENDAR',
+    'VERSION:2.0',
+    'PRODID:-//MedTracker//Appointments//EN',
+    'CALSCALE:GREGORIAN',
+    'METHOD:PUBLISH',
+    'BEGIN:VEVENT',
+    `UID:${appt.id}-appt@medtracker`,
+    `DTSTAMP:${utcStamp(now)}`,
+    `DTSTART:${utcStamp(start)}`,
+    'DURATION:PT1H',
+    `SUMMARY:${escapeText(fmt(msgs.calendar.apptSummary, { doctor: appt.clinic ? `${appt.doctor} (${appt.clinic})` : appt.doctor }))}`,
+    ...(appt.location ? [`LOCATION:${escapeText(appt.location)}`] : []),
+    `DESCRIPTION:${escapeText(description)}`,
+    ...alarms,
+    'END:VEVENT',
     'END:VCALENDAR',
   ];
   return lines.map(fold).join('\r\n') + '\r\n';

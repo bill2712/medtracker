@@ -214,7 +214,7 @@ export function HistoryView({
         <Segmented
           label={m.history.title}
           value={range}
-          onChange={setRange}
+          onChange={(v) => setRange(v as typeof range)}
           className="w-48"
           options={[
             { value: '7', label: m.history.days7 },

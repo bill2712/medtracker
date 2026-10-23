@@ -5,21 +5,23 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MotionConfig } from 'motion/react';
-import { History, House, Languages, Pill, Plus, Settings as SettingsIcon, WifiOff, type LucideIcon } from 'lucide-react';
-import type { DoseLog, Medication, MedColor, Settings, View } from './types';
+import { History, House, Languages, Pill, Plus, Settings as SettingsIcon, Stethoscope, WifiOff, type LucideIcon } from 'lucide-react';
+import type { Appointment, DoctorNote, DoseLog, Medication, MedColor, Settings, View } from './types';
 import { MED_COLORS } from './types';
 import { useI18n, pathForLang } from './i18n';
 import { LANGUAGES, isLang } from './i18n/config';
 import { useMedStore } from './hooks/useMedStore';
-import { useDoseReminders, useInstallPrompt, useNow, useOnline, useTheme } from './hooks/useAppHooks';
-import { getStatus, needsEarlyConfirm } from './lib/schedule';
+import { useVisitStore } from './hooks/useVisitStore';
+import { useAppointmentReminders, useDoseReminders, useInstallPrompt, useNow, useOnline, useTheme } from './hooks/useAppHooks';
+import { DAY, getStatus, needsEarlyConfirm } from './lib/schedule';
 import { clearAll, createBackup, DEFAULT_SETTINGS, loadSettings, parseBackup, saveSettings } from './lib/storage';
-import { buildICS } from './lib/ics';
+import { buildAppointmentICS, buildICS } from './lib/ics';
+import { nextAppointment, openNotes } from './lib/visits';
 import { displayName, shareSummary } from './lib/describe';
 import { downloadFile, readFile, safeFilename, shareText } from './lib/files';
 import { requestPermission, showNotification } from './lib/notifications';
 import { safePushState } from './lib/safeStorage';
-import { sampleMeds } from './lib/sample';
+import { sampleMeds, sampleVisits } from './lib/sample';
 import { ToastProvider, useToast } from './components/Toast';
 import { ConfirmDialog, cx } from './components/ui';
 import { TodayView } from './components/TodayView';
@@ -28,8 +30,11 @@ import { SettingsView } from './components/SettingsView';
 import { MedicationForm } from './components/MedicationForm';
 import { DoseLogModal } from './components/DoseLogModal';
 import { RefillModal } from './components/RefillModal';
+import { VisitsView } from './components/VisitsView';
+import { AppointmentForm } from './components/AppointmentForm';
+import { VisitPrepModal, type CompleteVisit } from './components/VisitPrepModal';
 
-const VIEWS: View[] = ['today', 'history', 'settings'];
+const VIEWS: View[] = ['today', 'visits', 'history', 'settings'];
 const viewFromHash = (): View => {
   const v = window.location.hash.replace(/^#\/?/, '') as View;
   return VIEWS.includes(v) ? v : 'today';
@@ -56,6 +61,7 @@ function useHashView() {
 type Confirm =
   | { kind: 'early'; med: Medication; due: Date }
   | { kind: 'delete'; med: Medication }
+  | { kind: 'deleteAppt'; appt: Appointment }
   | { kind: 'reset' };
 
 function Shell() {
@@ -63,6 +69,8 @@ function Shell() {
   const toast = useToast();
   const store = useMedStore();
   const { meds } = store;
+  const visits = useVisitStore();
+  const { appointments, notes } = visits;
   const now = useNow();
   const online = useOnline();
   const install = useInstallPrompt();
@@ -73,6 +81,9 @@ function Shell() {
   const [logMed, setLogMed] = useState<Medication | null>(null);
   const [refillMed, setRefillMed] = useState<Medication | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [apptEditing, setApptEditing] = useState<{ appt: Appointment | null; preset?: Partial<Appointment> } | null>(null);
+  const [prepId, setPrepId] = useState<string | null>(null);
+  const prepAppt = appointments.find((a) => a.id === prepId) ?? null;
   // Keep the last dialog's text on screen while it animates out.
   const lastConfirm = useRef<Confirm | null>(null);
   if (confirm) lastConfirm.current = confirm;
@@ -86,6 +97,11 @@ function Shell() {
     body:
       t(m.notify.body, { amount: f.amount(med.dosage, med.form) }) +
       (med.instructions !== 'none' ? ` ${m.instructions[med.instructions]}.` : ''),
+  }));
+
+  useAppointmentReminders(appointments, settings.notifications, (a) => ({
+    title: t(m.notify.apptTitle, { doctor: a.clinic ? `${a.doctor} · ${a.clinic}` : a.doctor }),
+    body: [f.relativeDateTime(new Date(a.time)), a.location].filter(Boolean).join(' · '),
   }));
 
   // Tab title shows how many doses need attention.
@@ -162,6 +178,65 @@ function Shell() {
     });
   };
 
+  const shareWithToast = async (title: string, text: string) => {
+    const result = await shareText(title, text);
+    if (result === 'copied') toast({ message: m.toast.copied });
+  };
+
+  const visitActions = {
+    addNote: (n: DoctorNote) => {
+      visits.addNote(n);
+      toast({ message: m.toast.noteAdded });
+    },
+    removeNote: (n: DoctorNote) => {
+      const removed = visits.removeNote(n.id);
+      if (removed)
+        toast({
+          message: m.toast.noteDeleted,
+          tone: 'info',
+          action: { label: m.toast.undo, onClick: () => visits.restoreNote(removed.note, removed.index) },
+        });
+    },
+    saveAppt: (a: Appointment) => {
+      const isNew = !appointments.some((x) => x.id === a.id);
+      visits.upsertAppt(a);
+      setApptEditing(null);
+      toast({ message: isNew && apptEditing?.preset ? t(m.toast.followUp, { date: f.longDate(new Date(a.time)) }) : m.toast.apptSaved });
+    },
+    deleteAppt: (a: Appointment) => {
+      const removed = visits.removeAppt(a.id);
+      setApptEditing(null);
+      setPrepId(null);
+      if (removed)
+        toast({
+          message: m.toast.apptDeleted,
+          tone: 'info',
+          action: { label: m.toast.undo, onClick: () => visits.restoreAppt(removed.appt, removed.linked) },
+        });
+    },
+    calendar: (a: Appointment, description: string) => {
+      downloadFile(`medtracker-${safeFilename(a.doctor)}.ics`, buildAppointmentICS(a, m, description), 'text/calendar;charset=utf-8');
+      toast({ message: m.toast.calendar });
+    },
+    complete: ((a, outcome, followUpDays) => {
+      visits.upsertAppt({ ...a, done: true, outcome: outcome.trim() });
+      setPrepId(null);
+      toast({ message: m.toast.visitDone });
+      if (followUpDays) {
+        const next = new Date(Date.parse(a.time) + followUpDays * DAY);
+        setApptEditing({
+          appt: null,
+          preset: { doctor: a.doctor, clinic: a.clinic, location: a.location, reminders: a.reminders, bring: a.bring, time: next.toISOString() },
+        });
+      }
+    }) as CompleteVisit,
+    saveOutcome: (a: Appointment, outcome: string) => {
+      visits.upsertAppt({ ...a, outcome: outcome.trim() });
+      setPrepId(null);
+      toast({ message: m.toast.visitDone });
+    },
+  };
+
   const deleteMed = (med: Medication) => {
     const removed = store.remove(med.id);
     setEditing(null);
@@ -202,18 +277,26 @@ function Shell() {
     },
     onExport: () => {
       const date = new Date().toISOString().slice(0, 10);
-      downloadFile(`medtracker-backup-${date}.json`, JSON.stringify(createBackup(meds, settings), null, 2), 'application/json');
+      downloadFile(`medtracker-backup-${date}.json`, JSON.stringify(createBackup(meds, appointments, notes, settings), null, 2), 'application/json');
       toast({ message: m.toast.exported });
     },
     onImport: async (file: File) => {
       try {
-        const { medications, settings: imported } = parseBackup(await readFile(file));
-        const previous = meds;
+        const backup = parseBackup(await readFile(file));
+        const { medications, settings: imported } = backup;
+        const previous = { meds, appointments, notes };
         store.setMeds(medications);
+        visits.replaceAll(backup.appointments, backup.notes);
         if (imported) setSettings((s) => ({ ...imported, notifications: s.notifications }));
         toast({
           message: f.plural(m.toast.imported, medications.length),
-          action: { label: m.toast.undo, onClick: () => store.setMeds(previous) },
+          action: {
+            label: m.toast.undo,
+            onClick: () => {
+              store.setMeds(previous.meds);
+              visits.replaceAll(previous.appointments, previous.notes);
+            },
+          },
         });
       } catch {
         toast({ message: m.toast.importFailed, tone: 'error' });
@@ -230,6 +313,7 @@ function Shell() {
 
   const NAV: { view: View; label: string; icon: LucideIcon }[] = [
     { view: 'today', label: m.nav.today, icon: House },
+    { view: 'visits', label: m.nav.visits, icon: Stethoscope },
     { view: 'history', label: m.nav.history, icon: History },
     { view: 'settings', label: m.nav.settings, icon: SettingsIcon },
   ];
@@ -317,10 +401,28 @@ function Shell() {
             now={now}
             handlers={handlers}
             onAdd={openAdd}
+            nextAppt={nextAppointment(appointments, now)}
+            openNotesCount={openNotes(notes).length}
+            onOpenAppt={(a) => setPrepId(a.id)}
             onSample={() => {
-              store.setMeds(sampleMeds(m));
+              const sample = sampleMeds(m);
+              store.setMeds(sample);
+              const v = sampleVisits(m, sample);
+              visits.replaceAll(v.appointments, v.notes);
               toast({ message: m.toast.sampleAdded });
             }}
+          />
+        )}
+        {view === 'visits' && (
+          <VisitsView
+            now={now}
+            meds={meds}
+            appointments={appointments}
+            notes={notes}
+            onAdd={() => setApptEditing({ appt: null })}
+            onOpen={(a) => setPrepId(a.id)}
+            onAddNote={visitActions.addNote}
+            onRemoveNote={visitActions.removeNote}
           />
         )}
         {view === 'history' && <HistoryView meds={meds} now={now} onRemoveLog={removeLogWithUndo} />}
@@ -350,11 +452,11 @@ function Shell() {
         </footer>
       </main>
 
-      {view === 'today' && meds.length > 0 && (
+      {((view === 'today' && meds.length > 0) || view === 'visits') && (
         <button
           type="button"
-          onClick={openAdd}
-          aria-label={m.nav.add}
+          onClick={view === 'visits' ? () => setApptEditing({ appt: null }) : openAdd}
+          aria-label={view === 'visits' ? m.appt.add : m.nav.add}
           className="fixed bottom-[calc(5.25rem+env(safe-area-inset-bottom))] right-4 z-30 inline-flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-600 text-white shadow-lg shadow-emerald-600/30 transition-transform hover:bg-emerald-700 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 md:hidden dark:focus-visible:ring-offset-slate-950"
         >
           <Plus size={26} aria-hidden="true" />
@@ -365,7 +467,7 @@ function Shell() {
         aria-label={m.nav.main}
         className="fixed inset-x-0 bottom-0 z-30 border-t border-slate-200/80 bg-white/90 pb-[env(safe-area-inset-bottom)] backdrop-blur-lg md:hidden dark:border-slate-800 dark:bg-slate-950/90"
       >
-        <ul className="mx-auto grid max-w-md grid-cols-3">
+        <ul className="mx-auto grid max-w-md grid-cols-4">
           {NAV.map((n) => (
             <li key={n.view}>
               <button
@@ -420,6 +522,46 @@ function Shell() {
         }}
       />
 
+      <VisitPrepModal
+        appt={prepAppt}
+        now={now}
+        meds={meds}
+        notes={notes}
+        appointments={appointments}
+        onAddNote={visitActions.addNote}
+        onToggleNote={visits.toggleDiscussed}
+        onRemoveNote={visitActions.removeNote}
+        onShare={(text) => void shareWithToast(m.prep.title, text)}
+        onCalendar={visitActions.calendar}
+        onEdit={(a) => setApptEditing({ appt: a })}
+        onComplete={visitActions.complete}
+        onSaveOutcome={visitActions.saveOutcome}
+        onClose={() => setPrepId(null)}
+      />
+
+      <AppointmentForm
+        open={!!apptEditing}
+        appt={apptEditing?.appt ?? null}
+        preset={apptEditing?.preset}
+        onSave={visitActions.saveAppt}
+        onDelete={(a) => setConfirm({ kind: 'deleteAppt', appt: a })}
+        onClose={() => setApptEditing(null)}
+      />
+
+      <ConfirmDialog
+        open={confirm?.kind === 'deleteAppt'}
+        title={m.appt.deleteTitle}
+        body={
+          shown?.kind === 'deleteAppt'
+            ? t(m.appt.deleteBody, { doctor: shown.appt.doctor, date: f.longDate(new Date(shown.appt.time)) })
+            : ''
+        }
+        confirmLabel={m.confirm.delete}
+        tone="danger"
+        onConfirm={() => confirm?.kind === 'deleteAppt' && visitActions.deleteAppt(confirm.appt)}
+        onClose={() => setConfirm(null)}
+      />
+
       <ConfirmDialog
         open={confirm?.kind === 'early'}
         title={shown?.kind === 'early' && shown.med.schedule.type === 'asNeeded' ? m.confirm.prnTitle : m.confirm.earlyTitle}
@@ -455,6 +597,7 @@ function Shell() {
         onConfirm={() => {
           clearAll();
           store.setMeds([]);
+          visits.replaceAll([], []);
           setSettings(DEFAULT_SETTINGS);
           toast({ message: m.toast.erased });
           go('today');

@@ -69,6 +69,13 @@ export function createFormatter(messages: Messages, intlLocale: string) {
     return fmt(messages.time.m, { m });
   };
 
+  const rtf = typeof Intl.RelativeTimeFormat === 'function' ? new Intl.RelativeTimeFormat(intlLocale, { numeric: 'auto' }) : null;
+  /** Countdown to a future moment: exact under two days ("in 5 h 20 min"), whole days after ("in 12 days"). */
+  const until = (ms: number, inTemplate: string) => {
+    if (ms >= 2 * 86_400_000 && rtf) return rtf.format(Math.round(ms / 86_400_000), 'day');
+    return fmt(inTemplate, { duration: duration(ms) });
+  };
+
   const list = (items: string[]) => (listFmt ? listFmt.format(items) : items.join(messages.time.listSep));
 
   /** "08:00" (24h string) → localised clock time. */
@@ -79,7 +86,7 @@ export function createFormatter(messages: Messages, intlLocale: string) {
     return time(d);
   };
 
-  return { plural, number, amount, time, date, weekday, longDate, relativeDateTime, dayLabel, duration, list, clock };
+  return { plural, number, amount, time, date, weekday, longDate, relativeDateTime, dayLabel, duration, until, list, clock };
 }
 
 export type Formatter = ReturnType<typeof createFormatter>;
