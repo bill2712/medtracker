@@ -1,0 +1,48 @@
+name: Build and deploy
+
+# Pull requests: type-check and build.
+# Pushes to main: also publish the site to the gh-pages branch (GitHub Pages).
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Type-check
+        run: npm run lint
+
+      - name: Build
+        run: npm run build
+        env:
+          # Served from https://<owner>.github.io/<repo>/
+          BASE_PATH: /${{ github.event.repository.name }}/
+          SITE_URL: https://${{ github.repository_owner }}.github.io
+
+      - name: Publish to GitHub Pages
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./dist
+          force_orphan: true
+          commit_message: Deploy ${{ github.sha }}
