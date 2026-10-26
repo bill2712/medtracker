@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://bill2712.github.io/medtracker/sitemap.xml
