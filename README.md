@@ -62,6 +62,12 @@ npm run preview    # serve the production build
 
 Deploy `dist/` to any static host. The language folders contain their own `index.html`, so no rewrite rules are needed.
 
+### GitHub Pages (automatic)
+
+Live at **https://bill2712.github.io/medtracker/**.
+
+`.github/workflows/deploy.yml` type-checks and builds every pull request. On every push to `main` it also builds with `BASE_PATH=/medtracker/` and `SITE_URL=https://bill2712.github.io`, then publishes `dist/` to the `gh-pages` branch, which GitHub Pages serves (Settings → Pages → Deploy from a branch → `gh-pages` / root). To host at a domain root instead, build with `BASE_PATH=/`.
+
 ## Project structure
 
 ```

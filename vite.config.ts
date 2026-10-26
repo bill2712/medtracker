@@ -8,6 +8,8 @@ import pkg from './package.json';
 export default defineConfig(({ mode }) => {
   const env = { ...loadEnv(mode, '.', ''), ...process.env };
   return {
+    // Sub-path when hosted at e.g. https://user.github.io/medtracker/ (set by the deploy workflow).
+    base: env.BASE_PATH || '/',
     plugins: [react(), tailwindcss(), seoPlugin({ siteUrl: resolveSiteUrl(env) })],
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),

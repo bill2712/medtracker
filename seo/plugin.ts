@@ -188,6 +188,12 @@ export function seoPlugin(options: { siteUrl: string }): Plugin {
           source: render(template, { lang: l.code, path: langPath(l.code), isRoot: false }),
         });
       }
+      // Static hosts such as GitHub Pages serve 404.html for unknown paths: show the app instead of an error.
+      this.emitFile({
+        type: 'asset',
+        fileName: '404.html',
+        source: render(template, rootTarget()).replace('content="index, follow, max-image-preview:large"', 'content="noindex"'),
+      });
       if (siteUrl) this.emitFile({ type: 'asset', fileName: 'sitemap.xml', source: sitemap() });
       this.emitFile({
         type: 'asset',
